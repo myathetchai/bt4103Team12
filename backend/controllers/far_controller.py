@@ -26,6 +26,13 @@ from models.far_model import (
     GroupMetricsRequest,
     GroupMetricsResponse,
     GroupMetricsGroup,
+    CohortInsightsRequest,
+    CohortInsightsResponse,
+    DistributionItem,
+    AssetExplainRequest,
+    AssetExplainResponse,
+    AssetMeta,
+    AlignmentStat,
 )
 
 router = APIRouter(prefix="/api/far", tags=["FAR dashboard"])
@@ -216,5 +223,68 @@ def group_metrics(req: GroupMetricsRequest) -> GroupMetricsResponse:
         )
         groups = [GroupMetricsGroup(label=k, values=v) for k, v in stats_map.items()]
         return GroupMetricsResponse(datasetKey=req.dataset, groupBy=req.groupBy, groups=groups)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/cohort-insights", response_model=CohortInsightsResponse)
+def cohort_insights(req: CohortInsightsRequest) -> CohortInsightsResponse:
+    try:
+        total, distributions, medians, top_categories, top_sectors = service.get_cohort_insights(
+            top_n=req.topN,
+            categorical_filters=(req.filters.categorical if req.filters else None),
+            numeric_filters=(
+                {k: {"min": v.min, "max": v.max} for k, v in req.filters.numeric.items()} if (req.filters and req.filters.numeric) else None
+            ),
+        )
+        dmap = {k: [DistributionItem(label=lab, count=cnt, pct=pct) for (lab, cnt, pct) in v] for k, v in distributions.items()}
+        def map_lift(lst):
+            return [
+                {
+                    "label": lab,
+                    "count": cnt,
+                    "pct": pct,
+                    "lift": lift,
+                }
+                for (lab, cnt, pct, lift) in lst
+            ]
+        return CohortInsightsResponse(
+            datasetKey="customers",
+            total=total,
+            distributions=dmap,
+            numericMedians=medians,
+            topCategories=map_lift(top_categories),
+            topSectors=map_lift(top_sectors),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/asset-explain", response_model=AssetExplainResponse)
+def asset_explain(req: AssetExplainRequest) -> AssetExplainResponse:
+    try:
+        asset_row, total, stats_map = service.explain_asset_alignment(
+            key=req.key,
+            key_type=req.keyType,
+            categorical_filters=(req.filters.categorical if req.filters else None),
+            numeric_filters=(
+                {k: {"min": v.min, "max": v.max} for k, v in req.filters.numeric.items()} if (req.filters and req.filters.numeric) else None
+            ),
+        )
+        if not asset_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        def as_align(tpl):
+            return AlignmentStat(pct=tpl[0], baselinePct=tpl[1], lift=tpl[2])
+        return AssetExplainResponse(
+            asset=AssetMeta(**{k: asset_row.get(k) for k in AssetMeta.model_fields.keys()}),
+            cohortSize=total,
+            capacityMatch=as_align(stats_map["capacityMatch"]),
+            riskMatch=as_align(stats_map["riskMatch"]),
+            categoryMatch=as_align(stats_map["categoryMatch"]),
+            sectorMatch=as_align(stats_map["sectorMatch"]),
+            marketMatch=as_align(stats_map["marketMatch"]),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

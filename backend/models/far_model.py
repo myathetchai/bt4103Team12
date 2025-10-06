@@ -194,3 +194,68 @@ class GroupMetricsResponse(BaseModel):
     groupBy: str
     groups: List[GroupMetricsGroup]
 
+
+class DistributionItem(BaseModel):
+    label: Optional[str]
+    count: int
+    pct: float
+
+
+class TopWithLift(BaseModel):
+    label: Optional[str]
+    count: int
+    pct: float
+    lift: float
+
+
+class CohortInsightsRequest(BaseModel):
+    dataset: str
+    topN: int = Field(default=10, ge=1, le=50)
+    filters: Optional[FilterSpec] = None
+
+
+class CohortInsightsResponse(BaseModel):
+    datasetKey: str
+    total: int
+    distributions: Dict[str, List[DistributionItem]]
+    numericMedians: Dict[str, float]
+    topCategories: List[TopWithLift]
+    topSectors: List[TopWithLift]
+
+
+class AssetExplainRequest(BaseModel):
+    keyType: str = Field(default="ISIN", description="ISIN|name")
+    key: str
+    filters: Optional[FilterSpec] = None
+
+
+class AssetMeta(BaseModel):
+    ISIN: Optional[str] = None
+    assetName: Optional[str] = None
+    assetCategory: Optional[str] = None
+    assetSubCategory: Optional[str] = None
+    marketID: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    popularity_profile: Optional[str] = None
+    liquidity_profile: Optional[str] = None
+    holding_style: Optional[str] = None
+    median_holding_days: Optional[float] = None
+    investor_concentration_index: Optional[float] = None
+    investor_concentration_profile: Optional[str] = None
+
+
+class AlignmentStat(BaseModel):
+    pct: float
+    baselinePct: float
+    lift: float
+
+
+class AssetExplainResponse(BaseModel):
+    asset: AssetMeta
+    cohortSize: int
+    capacityMatch: AlignmentStat
+    riskMatch: AlignmentStat
+    categoryMatch: AlignmentStat
+    sectorMatch: AlignmentStat
+    marketMatch: AlignmentStat

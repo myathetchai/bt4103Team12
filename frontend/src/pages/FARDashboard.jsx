@@ -324,6 +324,15 @@ const FARDashboard = () => {
   const topSecBody = dataset ? { dataset, column: "preferred_sector", topN: 10, filters: filtersPayload } : null;
   const { data: topSec } = usePost(`${API_BASE}/api/far/top`, topSecBody, [JSON.stringify(topSecBody)]);
 
+  const cohortBody = dataset ? { dataset, topN: 10, filters: filtersPayload } : null;
+  const { data: cohort } = usePost(`${API_BASE}/api/far/cohort-insights`, cohortBody, [JSON.stringify(cohortBody)]);
+
+  const [assetKey, setAssetKey] = useState("");
+  const [assetKeyType, setAssetKeyType] = useState("ISIN");
+  const [explainTick, setExplainTick] = useState(0);
+  const assetExplainBody = assetKey ? { keyType: assetKeyType, key: assetKey, filters: filtersPayload } : null;
+  const { data: explain } = usePost(`${API_BASE}/api/far/asset-explain`, assetExplainBody, [assetKey, assetKeyType, JSON.stringify(filtersPayload), explainTick]);
+
   const selectedCount = rowsResp?.total ?? 0;
 
   // helper for heat intensity
@@ -592,6 +601,86 @@ const FARDashboard = () => {
                   </Box>
                 </Box>
               </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+
+        {/* Row 4: Cohort insights + Asset explanation */}
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" }, gap: 2 }}>
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Cohort insights</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Chip size="small" label={`Cohort: ${cohort?.total ?? 0}`} />
+              </Stack>
+              <Typography variant="caption" color="text.secondary">Numeric medians</Typography>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+                {cohort?.numericMedians && Object.entries(cohort.numericMedians).map(([k, v]) => (
+                  <Chip key={k} size="small" label={`${k}: ${Number(v).toFixed(2)}`} />
+                ))}
+              </Stack>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Top categories (pct, lift)</Typography>
+                  <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                    {(cohort?.topCategories || []).map((t, i) => (
+                      <Stack key={i} direction="row" justifyContent="space-between">
+                        <Typography variant="body2">{t.label || 'NA'}</Typography>
+                        <Typography variant="body2" color="text.secondary">{t.pct.toFixed(1)}% · ×{Number(t.lift).toFixed(2)}</Typography>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </Box>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Top sectors (pct, lift)</Typography>
+                  <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                    {(cohort?.topSectors || []).map((t, i) => (
+                      <Stack key={i} direction="row" justifyContent="space-between">
+                        <Typography variant="body2">{t.label || 'NA'}</Typography>
+                        <Typography variant="body2" color="text.secondary">{t.pct.toFixed(1)}% · ×{Number(t.lift).toFixed(2)}</Typography>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </Box>
+              </Stack>
+            </CardContent>
+          </Card>
+
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Why this asset?</Typography>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <FormControl size="small" sx={{ minWidth: 120 }}>
+                  <InputLabel id="asset-key-type-label">Key</InputLabel>
+                  <Select labelId="asset-key-type-label" value={assetKeyType} label="Key" onChange={(e) => setAssetKeyType(e.target.value)}>
+                    <MenuItem value="ISIN">ISIN</MenuItem>
+                    <MenuItem value="name">Name</MenuItem>
+                  </Select>
+                </FormControl>
+                <TextField size="small" label={assetKeyType === 'ISIN' ? 'ISIN' : 'Asset name'} value={assetKey} onChange={(e) => setAssetKey(e.target.value)} sx={{ minWidth: 220 }} />
+                <Button size="small" variant="outlined" onClick={() => setExplainTick((t) => t + 1)}>Explain</Button>
+              </Stack>
+              {explain?.asset ? (
+                <Stack spacing={1}>
+                  <Typography variant="body2" color="text.secondary">Cohort size: {explain.cohortSize}</Typography>
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                    {[
+                      { label: 'Capacity', stat: explain.capacityMatch },
+                      { label: 'Risk', stat: explain.riskMatch },
+                      { label: 'Category', stat: explain.categoryMatch },
+                      { label: 'Sector', stat: explain.sectorMatch },
+                      { label: 'Market', stat: explain.marketMatch },
+                    ].map((item, idx) => (
+                      <Box key={idx} sx={{ flex: 1, p: 1, border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                        <Typography variant="caption" color="text.secondary">{item.label}</Typography>
+                        <Typography variant="body2">{item.stat.pct.toFixed(1)}% cohort · baseline {item.stat.baselinePct.toFixed(1)}% · ×{Number(item.stat.lift).toFixed(2)}</Typography>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">Enter an ISIN or asset name and click Explain.</Typography>
+              )}
             </CardContent>
           </Card>
         </Box>

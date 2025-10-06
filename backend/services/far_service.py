@@ -387,6 +387,123 @@ class FARDatasetService:
         items.sort(key=lambda x: x[1], reverse=True)
         return items[:top_n]
 
+    # ---------- EDA & Explainability helpers ----------
+    def get_cohort_insights(
+        self,
+        top_n: int,
+        categorical_filters: Optional[Dict[str, List[str]]] = None,
+        numeric_filters: Optional[Dict[str, dict]] = None,
+    ) -> Tuple[int, Dict[str, List[Tuple[str, int, float]]], Dict[str, float], List[Tuple[str, int, float, float]], List[Tuple[str, int, float, float]]]:
+        """Return cohort size, categorical distributions (with pct), numeric medians, and top categories/sectors with lift vs overall."""
+        import numpy as np
+
+        customers = self._get_df("customers")
+        cohort = self._apply_filters(customers, categorical_filters, numeric_filters, None, None)
+        total = int(len(cohort))
+        if total == 0:
+            return 0, {}, {}, [], []
+
+        cat_cols = [
+            "customerType",
+            "investor_type",
+            "riskLevel",
+            "investmentCapacity",
+            "buy_recency_category",
+            "preferred_market",
+            "preferred_asset_category",
+            "preferred_sector",
+        ]
+        num_cols = [
+            "avg_transactions_per_month",
+            "trading_activity_ratio",
+            "days_since_last_buy",
+            "current_num_assets_held",
+            "current_diversification_score",
+            "current_portfolio_concentration",
+        ]
+
+        distributions: Dict[str, List[Tuple[str, int, float]]] = {}
+        for col in cat_cols:
+            if col not in cohort.columns:
+                continue
+            vc = cohort[col].astype(object).fillna("<NA>").value_counts(dropna=False)
+            dist = []
+            for label, cnt in vc.items():
+                pct = (cnt / total) * 100.0
+                dist.append((str(label), int(cnt), float(pct)))
+            distributions[col] = dist
+
+        medians: Dict[str, float] = {}
+        for col in num_cols:
+            if col in cohort.columns:
+                med = float(np.nanmedian(cohort[col].astype(float)))
+                medians[col] = med
+
+        # lift vs overall for category/sector preference
+        overall = customers
+        def top_with_lift(col: str) -> List[Tuple[str, int, float, float]]:
+            if col not in cohort.columns:
+                return []
+            cohort_counts = cohort[col].astype(object).fillna("<NA>").value_counts(dropna=False)
+            overall_counts = overall[col].astype(object).fillna("<NA>").value_counts(dropna=False)
+            out: List[Tuple[str, int, float, float]] = []
+            for label, cnt in cohort_counts.items():
+                pct = (cnt / total) * 100.0
+                base_pct = (overall_counts.get(label, 0) / max(1, len(overall))) * 100.0
+                lift = (pct / base_pct) if base_pct > 0 else float("inf")
+                out.append((str(label), int(cnt), float(pct), float(lift)))
+            out.sort(key=lambda x: x[2], reverse=True)
+            return out[:top_n]
+
+        top_categories = top_with_lift("preferred_asset_category")
+        top_sectors = top_with_lift("preferred_sector")
+        return total, distributions, medians, top_categories, top_sectors
+
+    def explain_asset_alignment(
+        self,
+        key: str,
+        key_type: str = "ISIN",
+        categorical_filters: Optional[Dict[str, List[str]]] = None,
+        numeric_filters: Optional[Dict[str, dict]] = None,
+    ) -> Tuple[Dict[str, Optional[str]], int, Dict[str, Tuple[float, float, float]]]:
+        """Given an asset key, compute alignment vs cohort on capacity/risk/category/sector/market with lift."""
+        assets = self._get_df("assets")
+        customers = self._get_df("customers")
+        cohort = self._apply_filters(customers, categorical_filters, numeric_filters, None, None)
+        total = int(len(cohort))
+        if total == 0:
+            return {}, 0, {}
+
+        # find asset row
+        if key_type.upper() == "ISIN":
+            match = assets[assets["ISIN"].astype(str) == str(key)]
+        else:
+            match = assets[assets["assetName"].astype(str).str.lower() == str(key).lower()]
+        if match.empty:
+            return {}, total, {}
+        asset_row = match.iloc[0].to_dict()
+
+        def alignment(col: str, cohort_col: str) -> Tuple[float, float, float]:
+            # pct of cohort whose preference equals asset's attribute
+            label = str(asset_row.get(col)) if asset_row.get(col) is not None else "<NA>"
+            if cohort_col not in cohort.columns:
+                return 0.0, 0.0, 0.0
+            cohort_counts = cohort[cohort_col].astype(object).fillna("<NA>").value_counts(dropna=False)
+            pct = (cohort_counts.get(label, 0) / total) * 100.0
+            overall_counts = customers[cohort_col].astype(object).fillna("<NA>").value_counts(dropna=False)
+            base_pct = (overall_counts.get(label, 0) / max(1, len(customers))) * 100.0
+            lift = (pct / base_pct) if base_pct > 0 else float("inf")
+            return float(pct), float(base_pct), float(lift)
+
+        stats = {
+            "capacityMatch": alignment("assetCategory", "preferred_asset_category"),  # proxy alignment
+            "riskMatch": alignment("sector", "preferred_sector"),  # proxy
+            "categoryMatch": alignment("assetCategory", "preferred_asset_category"),
+            "sectorMatch": alignment("sector", "preferred_sector"),
+            "marketMatch": alignment("marketID", "preferred_market"),
+        }
+        return asset_row, total, stats
+
     def get_group_metrics(
         self,
         dataset: str,

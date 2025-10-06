@@ -1,21 +1,42 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Box,
+  Button,
   Card,
   CardContent,
   Chip,
   Divider,
   FormControl,
+  FormControlLabel,
+  FormGroup,
   InputLabel,
   MenuItem,
   Select,
   Slider,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from "@mui/material";
 import { DataGrid } from "@mui/x-data-grid";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  LineChart,
+  Line,
+  Legend,
+  ScatterChart,
+  Scatter,
+  CartesianGrid,
+  Brush,
+} from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -49,6 +70,38 @@ const useFetch = (url) => {
     };
   }, [url]);
 
+  return { data, loading, error };
+};
+
+const usePost = (url, body, deps) => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let active = true;
+    if (!url || !body) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setLoading(true);
+    setError(null);
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
+      .then((j) => active && setData(j))
+      .catch((e) => active && setError(e))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, deps);
   return { data, loading, error };
 };
 
@@ -144,6 +197,8 @@ const FARDashboard = () => {
   const [numFilters, setNumFilters] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
   const [groupBy, setGroupBy] = useState("");
+  const [compareMode, setCompareMode] = useState(false);
+  const [metric, setMetric] = useState("current_num_assets_held");
 
   useEffect(() => {
     // reset filters when dataset changes
@@ -240,126 +295,326 @@ const FARDashboard = () => {
       .catch(() => setSummary(null));
   }, [dataset, groupBy, catFilters, numFilters]);
 
+  // ---- Analytics bodies ----
+  const filtersPayload = useMemo(() => ({
+    categorical: Object.fromEntries(Object.entries(catFilters).filter(([, v]) => v && v.length)),
+    numeric: Object.fromEntries(Object.entries(numFilters).filter(([, v]) => v && (v.min !== undefined || v.max !== undefined))),
+  }), [catFilters, numFilters]);
+
+  const pivotBody = dataset ? { dataset, rows: "investmentCapacity", cols: "riskLevel", agg: "count", filters: filtersPayload } : null;
+  const { data: pivot } = usePost(`${API_BASE}/api/far/pivot`, pivotBody, [JSON.stringify(pivotBody)]);
+
+  const donutBody = dataset ? { dataset, column: "investor_type", topN: 10, filters: filtersPayload } : null;
+  const { data: donut } = usePost(`${API_BASE}/api/far/top`, donutBody, [JSON.stringify(donutBody)]);
+
+  const histBody = dataset ? { dataset, column: "trading_activity_ratio", bins: 20, filters: filtersPayload } : null;
+  const { data: hist } = usePost(`${API_BASE}/api/far/histogram`, histBody, [JSON.stringify(histBody)]);
+
+  const tsBody = dataset ? { dataset, dateColumn: "timestamp", interval: "month", agg: "count", groupBy: "investor_type", filters: filtersPayload } : null;
+  const { data: ts } = usePost(`${API_BASE}/api/far/timeseries`, tsBody, [JSON.stringify(tsBody)]);
+
+  const gmBody = dataset ? { dataset, groupBy: "investor_type", metrics: ["current_num_assets_held", "current_diversification_score", "current_portfolio_concentration"], agg: "mean", filters: filtersPayload } : null;
+  const { data: gm } = usePost(`${API_BASE}/api/far/group-metrics`, gmBody, [JSON.stringify(gmBody)]);
+
+  const scatterBody = dataset ? { dataset, x: "days_since_last_buy", y: "avg_transactions_per_month", labelColumn: "investor_type", sample: 1000, filters: filtersPayload } : null;
+  const { data: scatter } = usePost(`${API_BASE}/api/far/scatter`, scatterBody, [JSON.stringify(scatterBody)]);
+
+  const topCatBody = dataset ? { dataset, column: "preferred_asset_category", topN: 10, filters: filtersPayload } : null;
+  const { data: topCat } = usePost(`${API_BASE}/api/far/top`, topCatBody, [JSON.stringify(topCatBody)]);
+  const topSecBody = dataset ? { dataset, column: "preferred_sector", topN: 10, filters: filtersPayload } : null;
+  const { data: topSec } = usePost(`${API_BASE}/api/far/top`, topSecBody, [JSON.stringify(topSecBody)]);
+
+  const selectedCount = rowsResp?.total ?? 0;
+
+  // helper for heat intensity
+  const heatColor = (value, max) => {
+    if (!max || max <= 0) return "#f1f5f9";
+    const t = Math.min(1, value / max);
+    const base = 240; // blue-ish
+    const intensity = Math.round(255 - t * 140);
+    return `rgb(${intensity}, ${intensity + 10}, 255)`;
+  };
+
   return (
-    <Stack spacing={3}>
-      <Typography variant="h5" fontWeight={700}>
-        FAR Dashboard
-      </Typography>
+    <Box sx={{ display: "flex", gap: 2 }}>
+      {/* Sidebar Filters */}
+      <Box sx={{ width: 300, position: "sticky", top: 16, alignSelf: "flex-start" }}>
+        <Card sx={{ borderRadius: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+              Analyze by customer profile
+            </Typography>
 
-      <Card sx={{ borderRadius: 2 }}>
-        <CardContent>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems="center">
             <DatasetSelector datasets={dsMap || {}} value={dataset} onChange={setDataset} />
+            <Divider sx={{ my: 2 }} />
 
-            <TextField
-              size="small"
-              label="Search"
-              value={searchQuery}
-              onChange={(e) => {
-                setPage(0);
-                setSearchQuery(e.target.value);
-              }}
-              sx={{ minWidth: 240 }}
-            />
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Customer Type</Typography>
+            <CategoricalFilter label="customerType" values={filters?.categorical?.customerType} value={catFilters.customerType} onChange={(v) => setCatFilters((p) => ({ ...p, customerType: v }))} />
+            <Divider sx={{ my: 1.5 }} />
 
-            <FormControl size="small" sx={{ minWidth: 240 }}>
-              <InputLabel id="groupby-label">Group by</InputLabel>
-              <Select
-                labelId="groupby-label"
-                value={groupBy}
-                label="Group by"
-                onChange={(e) => setGroupBy(e.target.value)}
-              >
-                <MenuItem value="">
-                  <em>None</em>
-                </MenuItem>
-                {availableGroupBy.map((c) => (
-                  <MenuItem key={c} value={c}>
-                    {c}
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Investor Type</Typography>
+            <CategoricalFilter label="investor_type" values={filters?.categorical?.investor_type} value={catFilters.investor_type} onChange={(v) => setCatFilters((p) => ({ ...p, investor_type: v }))} />
+            <Divider sx={{ my: 1.5 }} />
+
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Risk Level</Typography>
+            <CategoricalFilter label="riskLevel" values={filters?.categorical?.riskLevel} value={catFilters.riskLevel} onChange={(v) => setCatFilters((p) => ({ ...p, riskLevel: v }))} />
+            <Divider sx={{ my: 1.5 }} />
+
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Investment Capacity</Typography>
+            <CategoricalFilter label="investmentCapacity" values={filters?.categorical?.investmentCapacity} value={catFilters.investmentCapacity} onChange={(v) => setCatFilters((p) => ({ ...p, investmentCapacity: v }))} />
+            <Divider sx={{ my: 1.5 }} />
+
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Recency</Typography>
+            <CategoricalFilter label="buy_recency_category" values={filters?.categorical?.buy_recency_category} value={catFilters.buy_recency_category} onChange={(v) => setCatFilters((p) => ({ ...p, buy_recency_category: v }))} />
+            <Divider sx={{ my: 1.5 }} />
+
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>Days Since Last Buy</Typography>
+            <NumericFilter label="days_since_last_buy" range={filters?.numeric?.days_since_last_buy} value={numFilters.days_since_last_buy} onChange={(v) => setNumFilters((p) => ({ ...p, days_since_last_buy: v }))} />
+
+            <Divider sx={{ my: 2 }} />
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Chip size="small" label={`Showing: ${selectedCount}`} />
+              <Button size="small" onClick={() => { setCatFilters({}); setNumFilters({}); setSearchQuery(""); }}>
+                Reset
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
+      </Box>
+
+      {/* Main Content */}
+      <Stack spacing={2} sx={{ flex: 1 }}>
+        <Typography variant="h5" fontWeight={700}>Investment Analytics</Typography>
+
+        {/* Filters applied and search */}
+        <Card sx={{ borderRadius: 2 }}>
+          <CardContent>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems="center">
+              <TextField size="small" label="Search customers" value={searchQuery} onChange={(e) => { setPage(0); setSearchQuery(e.target.value); }} sx={{ minWidth: 280 }} />
+              <FormControl size="small" sx={{ minWidth: 220 }}>
+                <InputLabel id="groupby-label">Group by (Top chart)</InputLabel>
+                <Select labelId="groupby-label" value={groupBy} label="Group by" onChange={(e) => setGroupBy(e.target.value)}>
+                  <MenuItem value="">
+                    <em>None</em>
                   </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Stack>
+                  {availableGroupBy.map((c) => (
+                    <MenuItem key={c} value={c}>{c}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControlLabel control={<Switch checked={compareMode} onChange={(e) => setCompareMode(e.target.checked)} />} label="Compare segments" />
+            </Stack>
+          </CardContent>
+        </Card>
 
-          <Divider sx={{ my: 2 }} />
-
-          {/* Dynamic Filters */}
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} useFlexGap flexWrap="wrap">
-            {Object.entries(filters?.categorical || {}).slice(0, 6).map(([col, vals]) => (
-              <Box key={col} sx={{ minWidth: 240 }}>
-                <CategoricalFilter
-                  label={col}
-                  values={vals}
-                  value={catFilters[col]}
-                  onChange={(v) => {
-                    setPage(0);
-                    setCatFilters((prev) => ({ ...prev, [col]: v }));
-                  }}
-                />
+        {/* Row 1: Matrix + Donut + Histogram */}
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1.2fr 0.8fr 1fr" }, gap: 2 }}>
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Capacity × Risk (count)</Typography>
+              <Box sx={{ overflow: "auto", maxHeight: 360, mt: 1 }}>
+                {pivot && pivot.rows?.length ? (
+                  <Box component="table" sx={{ borderCollapse: "collapse", width: "100%" }}>
+                    <Box component="thead">
+                      <Box component="tr">
+                        <Box component="th" sx={{ p: 1 }}></Box>
+                        {pivot.cols.map((c) => (
+                          <Box component="th" key={c} sx={{ p: 1, fontSize: 12, color: "text.secondary" }}>{c}</Box>
+                        ))}
+                      </Box>
+                    </Box>
+                    <Box component="tbody">
+                      {pivot.rows.map((r, i) => {
+                        const maxVal = Math.max(...pivot.values.flat());
+                        return (
+                          <Box component="tr" key={r}>
+                            <Box component="td" sx={{ p: 1, fontSize: 12, color: "text.secondary", whiteSpace: "nowrap" }}>{r}</Box>
+                            {pivot.cols.map((c, j) => {
+                              const v = pivot.values[i][j] || 0;
+                              return (
+                                <Box
+                                  component="td"
+                                  key={`${r}-${c}`}
+                                  onClick={() => {
+                                    setCatFilters((prev) => ({ ...prev, investmentCapacity: [r], riskLevel: [c] }));
+                                  }}
+                                  sx={{ p: 1, textAlign: "center", cursor: "pointer", bgcolor: heatColor(v, maxVal), border: "1px solid #e5e7eb" }}
+                                >
+                                  <Typography variant="caption">{v}</Typography>
+                                </Box>
+                              );
+                            })}
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">No data</Typography>
+                )}
               </Box>
-            ))}
+            </CardContent>
+          </Card>
 
-            {Object.entries(filters?.numeric || {}).slice(0, 6).map(([col, rng]) => (
-              <Box key={col} sx={{ minWidth: 240, px: 1 }}>
-                <NumericFilter
-                  label={col}
-                  range={rng}
-                  value={numFilters[col]}
-                  onChange={(v) => {
-                    setPage(0);
-                    setNumFilters((prev) => ({ ...prev, [col]: v }));
-                  }}
-                />
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Investor Type Breakdown</Typography>
+              <Box sx={{ width: "100%", height: 260 }}>
+                <ResponsiveContainer>
+                  <PieChart>
+                    <Pie data={(donut?.series || []).map((d) => ({ name: d.category || "NA", value: d.count }))} dataKey="value" nameKey="name" outerRadius={90}>
+                      {(donut?.series || []).map((_, idx) => (
+                        <Cell key={`c-${idx}`} fill={["#305D9E", "#60A5FA", "#93C5FD", "#2563EB", "#1D4ED8"][idx % 5]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
               </Box>
-            ))}
-          </Stack>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
 
-      {/* Chart */}
-      <Card sx={{ borderRadius: 2 }}>
-        <CardContent>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-            {!dataset
-              ? "No datasets detected in server /datasets"
-              : groupBy
-              ? `Top ${summary?.series?.length || 0} by ${groupBy}`
-              : "Pick a 'Group by' to see distribution"}
-          </Typography>
-          <Box sx={{ width: "100%", height: 320 }}>
-            <ResponsiveContainer>
-              <BarChart data={(summary?.series || []).map((d) => ({ name: d.category || "NA", count: d.count }))}>
-                <XAxis dataKey="name" hide={false} interval={0} angle={-35} textAnchor="end" height={70} />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" fill="#305D9E" />
-              </BarChart>
-            </ResponsiveContainer>
-          </Box>
-        </CardContent>
-      </Card>
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Trading Activity Ratio</Typography>
+              <Box sx={{ width: "100%", height: 260 }}>
+                <ResponsiveContainer>
+                  <BarChart data={(hist?.counts || []).map((c, i) => ({ idx: i, count: c }))}>
+                    <XAxis dataKey="idx" hide />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#305D9E" />
+                    <Brush dataKey="idx" height={20} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Box>
+            </CardContent>
+          </Card>
+        </Box>
 
-      {/* Table */}
-      <Card sx={{ borderRadius: 2 }}>
-        <CardContent>
-          <Box sx={{ height: 560, width: "100%" }}>
-            <DataGrid
-              rows={tableRows}
-              columns={columns}
-              pagination
-              paginationModel={{ page, pageSize }}
-              onPaginationModelChange={(m) => {
-                setPage(m.page);
-                setPageSize(m.pageSize);
-              }}
-              pageSizeOptions={[10, 25, 50, 100]}
-              disableRowSelectionOnClick
-            />
-          </Box>
-        </CardContent>
-      </Card>
-    </Stack>
+        {/* Row 2: Timeseries + Group Metrics */}
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" }, gap: 2 }}>
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Transactions over time (by investor_type)</Typography>
+              <Box sx={{ width: "100%", height: 260 }}>
+                <ResponsiveContainer>
+                  <LineChart>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" type="category" allowDuplicatedCategory={false} />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    {(ts?.series || []).map((s, idx) => (
+                      <Line key={idx} dataKey="value" name={s.label || "all"} data={s.points} dot={false} stroke={["#2563EB", "#10B981", "#F59E0B", "#EF4444"][idx % 4]} />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </Box>
+            </CardContent>
+          </Card>
+
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="subtitle1" fontWeight={600}>Portfolio metrics by investor_type</Typography>
+                <FormControl size="small" sx={{ minWidth: 220 }}>
+                  <InputLabel id="metric-label">Metric</InputLabel>
+                  <Select labelId="metric-label" value={metric} label="Metric" onChange={(e) => setMetric(e.target.value)}>
+                    <MenuItem value="current_num_assets_held">Assets held</MenuItem>
+                    <MenuItem value="current_diversification_score">Diversification</MenuItem>
+                    <MenuItem value="current_portfolio_concentration">Concentration</MenuItem>
+                  </Select>
+                </FormControl>
+              </Stack>
+              <Box sx={{ width: "100%", height: 260 }}>
+                <ResponsiveContainer>
+                  <BarChart data={(gm?.groups || []).map((g) => ({ name: g.label, value: g.values?.[metric] }))}>
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#10B981" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Box>
+            </CardContent>
+          </Card>
+        </Box>
+
+        {/* Row 3: Scatter + Top categories */}
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" }, gap: 2 }}>
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Recency vs Activity</Typography>
+              <Box sx={{ width: "100%", height: 260 }}>
+                <ResponsiveContainer>
+                  <ScatterChart>
+                    <CartesianGrid />
+                    <XAxis dataKey="x" type="number" name="days since last buy" />
+                    <YAxis dataKey="y" type="number" name="avg tx per month" />
+                    <Tooltip cursor={{ strokeDasharray: "3 3" }} />
+                    <Scatter data={(scatter?.points || [])} fill="#6366F1" />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </Box>
+            </CardContent>
+          </Card>
+
+          <Card sx={{ borderRadius: 2, minHeight: 320 }}>
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600}>Top categories and sectors</Typography>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Preferred Asset Category</Typography>
+                  <Box sx={{ width: "100%", height: 220 }}>
+                    <ResponsiveContainer>
+                      <BarChart data={(topCat?.series || []).map((d) => ({ name: d.category || "NA", count: d.count }))}>
+                        <XAxis dataKey="name" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#2563EB" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Box>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Preferred Sector</Typography>
+                  <Box sx={{ width: "100%", height: 220 }}>
+                    <ResponsiveContainer>
+                      <BarChart data={(topSec?.series || []).map((d) => ({ name: d.category || "NA", count: d.count }))}>
+                        <XAxis dataKey="name" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#F59E0B" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Box>
+              </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+
+        {/* Table of customers */}
+        <Card sx={{ borderRadius: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" fontWeight={600} gutterBottom>Customers</Typography>
+            <Box sx={{ height: 560, width: "100%" }}>
+              <DataGrid
+                rows={tableRows}
+                columns={columns}
+                pagination
+                paginationModel={{ page, pageSize }}
+                onPaginationModelChange={(m) => { setPage(m.page); setPageSize(m.pageSize); }}
+                pageSizeOptions={[10, 25, 50, 100]}
+                disableRowSelectionOnClick
+              />
+            </Box>
+          </CardContent>
+        </Card>
+      </Stack>
+    </Box>
   );
 };
 

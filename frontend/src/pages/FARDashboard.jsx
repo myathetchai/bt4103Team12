@@ -26,6 +26,14 @@ const useFetch = (url) => {
 
   useEffect(() => {
     let active = true;
+    if (!url) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return () => {
+        active = false;
+      };
+    }
     setLoading(true);
     setError(null);
     fetch(url)
@@ -183,14 +191,15 @@ const FARDashboard = () => {
   const columns = useMemo(() => {
     const cols = rowsResp?.columns || meta?.columns?.map((c) => c.name) || [];
     const pk = meta?.primaryKeys || [];
-    return cols.slice(0, 24).map((c) => ({
-      field: c,
-      headerName: c,
-      flex: 1,
-      minWidth: 120,
-      sortable: false,
-      valueGetter: (params) => params.row?.[c],
-    })).map((col) => (pk.includes(col.field) ? { ...col, pinned: "left", minWidth: 160 } : col));
+    return cols.slice(0, 24)
+      .map((c) => ({
+        field: c,
+        headerName: c,
+        flex: 1,
+        minWidth: 120,
+        sortable: false,
+      }))
+      .map((col) => (pk.includes(col.field) ? { ...col, minWidth: 160 } : col));
   }, [rowsResp, meta]);
 
   const tableRows = useMemo(() => {

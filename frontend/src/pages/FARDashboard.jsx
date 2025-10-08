@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Typography, Card, CardContent, Chip, Divider, Button, ToggleButton, ToggleButtonGroup, TextField, Slider, FormGroup, FormControlLabel, Checkbox, Select, MenuItem, InputLabel, Grid } from "@mui/material";
-import { PieChart, Pie, Tooltip, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import { PieChart, Pie, Tooltip, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, ScatterChart, Scatter } from "recharts";
 import StatCard from "../components/StatCard";
 import { MdGroups, MdInsights, MdAttachMoney, MdTrendingUp } from "react-icons/md";
 
@@ -245,6 +245,42 @@ const CategoryBarCard = ({ title, rows }) => {
   );
 };
 
+const ClusterMap = ({ points, onSelectCluster }) => {
+  const data = (points || []).map((p) => ({ x: p.x, y: p.y, cluster: p.cluster }));
+  const clusters = Array.from(new Set(data.map((d) => d.cluster || "Unknown")));
+  const colorFor = (c) => {
+    const palette = ["#305D9E", "#54A6FF", "#9BD0FF", "#15428E", "#2E8B8B", "#E67E22", "#8E44AD"];
+    const idx = clusters.indexOf(c || "Unknown");
+    return palette[idx % palette.length];
+  };
+  return (
+    <Card>
+      <CardContent>
+        <Typography sx={{ fontWeight: 700, mb: 1 }}>Customer Cluster Map</Typography>
+        <Box sx={{ height: 360 }}>
+          <ResponsiveContainer>
+            <ScatterChart margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+              <CartesianGrid />
+              <XAxis type="number" dataKey="x" name="x" tick={{ fontSize: 12 }} />
+              <YAxis type="number" dataKey="y" name="y" tick={{ fontSize: 12 }} />
+              <Tooltip cursor={{ strokeDasharray: "3 3" }} />
+              {clusters.map((c) => (
+                <Scatter
+                  key={c || "Unknown"}
+                  name={c || "Unknown"}
+                  data={data.filter((d) => (d.cluster || "Unknown") === c)}
+                  fill={colorFor(c)}
+                  onClick={(e) => onSelectCluster?.(c)}
+                />
+              ))}
+            </ScatterChart>
+          </ResponsiveContainer>
+        </Box>
+      </CardContent>
+    </Card>
+  );
+};
+
 const TopAssetsTable = ({ rows, onSelectAsset }) => {
   return (
     <Card>
@@ -313,6 +349,7 @@ const FARDashboard = () => {
   const { data: investorBreakdown } = useApi("/api/far/investor-type-breakdown", body);
   const { data: activityHist } = useApi("/api/far/histogram", { ...body, column: "trading_activity_ratio", bins: 30 });
   const { data: explain } = useApi(selectedAsset ? "/api/far/explain" : null, { ...body, asset: selectedAsset });
+  const { data: clusterPoints } = useApi("/api/far/cluster-scatter", { ...body, limit: 2000 });
 
   const investorTypeData = useMemo(() => {
     return investorBreakdown?.rows || [];
@@ -382,6 +419,10 @@ const FARDashboard = () => {
 
             <Grid item xs={12}>
               <WhyPanel asset={selectedAsset} data={explain} />
+            </Grid>
+
+            <Grid item xs={12}>
+              <ClusterMap points={clusterPoints?.points || []} onSelectCluster={(c) => setFilters((f) => ({ ...f, cluster: [c] }))} />
             </Grid>
           </Grid>
         </Grid>

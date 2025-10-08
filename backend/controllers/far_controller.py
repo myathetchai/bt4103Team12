@@ -13,6 +13,7 @@ from models.far_model import (
     ScatterSampleRequest,
     SectorPrefsRequest,
     TopAssetsRequest,
+    ClusterScatterRequest,
 )
 from services import far_service
 
@@ -91,6 +92,15 @@ def investor_type_breakdown(req: MetricsRequest):
     counts = cust_f["investor_type"].value_counts()
     rows = [{"label": k, "value": int(v)} for k, v in counts.items()]
     return _clean({"rows": rows})
+
+
+@router.post("/cluster-scatter")
+def cluster_scatter(req: ClusterScatterRequest):
+    return _clean(
+        far_service.get_cluster_scatter(
+            req.filters.model_dump(exclude_none=True), req.limit
+        )
+    )
 
 
 @router.post("/histogram")

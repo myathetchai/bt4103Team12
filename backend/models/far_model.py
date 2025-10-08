@@ -21,6 +21,7 @@ class FARFilters(BaseModel):
     investor_type: Optional[List[str]] = Field(default=None, description="e.g., Buy-and-Hold, Moderate, Active")
     risk_level: Optional[List[str]] = Field(default=None)
     sectors: Optional[List[str]] = Field(default=None)
+    cluster: Optional[List[str]] = Field(default=None, description="Cluster labels to include")
     investment_capacity: Optional[NumericRange] = Field(default=None)
     date_range: Optional[DateRange] = Field(default=None)
     search_query: Optional[str] = Field(default=None)
@@ -84,6 +85,21 @@ class CategoryRow(BaseModel):
 
 class CategoryBreakdownResponse(BaseModel):
     rows: List[CategoryRow]
+
+
+class ClusterScatterRequest(BaseModel):
+    filters: FARFilters
+    limit: NonNegativeInt = Field(default=2000)
+
+
+class ClusterPoint(BaseModel):
+    x: float
+    y: float
+    cluster: Optional[str] = None
+
+
+class ClusterScatterResponse(BaseModel):
+    points: List[ClusterPoint]
 
 
 # Responses

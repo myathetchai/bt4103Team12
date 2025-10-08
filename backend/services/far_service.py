@@ -43,6 +43,7 @@ def detect_datasets() -> DatasetPaths:
         or _detect_file("customer_information_with_engineered")
         or _detect_file("customers_information_with_engineered")
         or _detect_file("customers_information_with_engineered_df")
+        or _detect_file("customer_information_engineered_kMeans")
         or _detect_file("customer_engineering_with_engineered")
     )
     # accommodate typo or correct spelling for assets/transactions
@@ -129,6 +130,7 @@ def _apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
         "customer_type": ["customer_type", "customerType"],
         "investor_type": ["investor_type"],
         "risk_level": ["risk_level", "riskLevel"],
+        "cluster": ["cluster", "cluster_label", "kMeansCluster", "kmeans_cluster"],
     }
     for key, candidates in mapping.items():
         values = (filters or {}).get(key)
@@ -423,6 +425,54 @@ def get_scatter_sample(filters: dict, limit: int = 5000) -> dict:
             "portfolio_value": float(r.get("portfolio_value")) if "portfolio_value" in sample.columns else None,
         })
     return {"rows": rows}
+
+
+def get_cluster_scatter(filters: dict, limit: int = 2000) -> dict:
+    dfs = load_dataframes()
+    cust = dfs.get("customers")
+    if cust is None or cust.empty:
+        return {"points": []}
+    cust_f = _apply_filters(cust, filters)
+    if cust_f.empty:
+        return {"points": []}
+    # Prefer precomputed 2D coords if available
+    x_col = next((c for c in ["x", "tsne_x", "umap_x", "pca_x"] if c in cust_f.columns), None)
+    y_col = next((c for c in ["y", "tsne_y", "umap_y", "pca_y"] if c in cust_f.columns), None)
+    cluster_col = next((c for c in ["cluster", "cluster_label", "kMeansCluster", "kmeans_cluster"] if c in cust_f.columns), None)
+    points = []
+    if x_col and y_col:
+        df = cust_f[[x_col, y_col] + ([cluster_col] if cluster_col else [])].dropna()
+        if len(df) > limit:
+            df = df.sample(n=limit, random_state=42)
+        for _, r in df.iterrows():
+            points.append({
+                "x": float(r[x_col]),
+                "y": float(r[y_col]),
+                "cluster": str(r[cluster_col]) if cluster_col else None,
+            })
+        return {"points": points}
+    # Fallback: project two numeric features
+    numeric_cols = [c for c in [
+        "trading_activity_ratio",
+        "avg_transactions_per_month",
+        "category_diversification",
+        "market_concentration",
+        "exploration_score",
+        "exploitation_score",
+    ] if c in cust_f.columns]
+    if len(numeric_cols) < 2:
+        return {"points": []}
+    df = cust_f[numeric_cols[:2] + ([cluster_col] if cluster_col else [])].dropna()
+    if len(df) > limit:
+        df = df.sample(n=limit, random_state=42)
+    xname, yname = numeric_cols[:2]
+    for _, r in df.iterrows():
+        points.append({
+            "x": float(r[xname]),
+            "y": float(r[yname]),
+            "cluster": str(r[cluster_col]) if cluster_col else None,
+        })
+    return {"points": points}
 
 
 def explain_asset(filters: dict, asset: str) -> dict:
